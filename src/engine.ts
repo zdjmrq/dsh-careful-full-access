@@ -19,7 +19,7 @@ import type { ModelCheckOutcome, ModelCheckRoute, ModelCheckRunner } from './mod
 import { PreviewRunner, renderPreviewSummary } from './preview.ts'
 import type { ProtectedRoots } from './protected.ts'
 import { classifyBash, classifyPwsh, type TierContext } from './tiers.ts'
-import type { GuardTier, GuardVerdict } from './types.ts'
+import type { GuardTier, GuardVerdict, PreviewOutcome } from './types.ts'
 
 /** The engine's settled decision for one call. */
 export type EngineDecision =
@@ -54,6 +54,74 @@ export interface JudgeInput {
   sessionKey: string
   /** The session's model route for the model-check call. */
   route: ModelCheckRoute | undefined
+}
+
+/** Quote one command or path without losing whitespace or escape characters. */
+function quoteForApproval(value: string): string {
+  return JSON.stringify(value)
+}
+
+/** Describe the destructive effect without claiming that an unexpanded expression is a concrete target. */
+function describeOperation(facts: LexFacts): string {
+  if (facts.git?.subcommand === 'clean') return '删除 Git 工作区中未跟踪的文件和目录'
+  if (facts.git?.subcommand === 'reset') return '用仓库版本覆盖 Git 工作区文件，未提交的修改会丢失'
+  if (facts.git?.subcommand === 'rm') return '从 Git 索引和工作区删除已跟踪的文件'
+  if (facts.families.includes('format') || facts.diskpartClean) return '格式化或清空存储设备，其中的数据可能全部丢失'
+  if (facts.families.includes('recycle')) return '清空回收站，其中的内容会被永久删除'
+  if (facts.robocopyMir) return '执行镜像同步，并删除目标端中源目录不存在的内容'
+  if (facts.families.includes('delete') || facts.netDeleteCall) {
+    return facts.recursive ? '递归删除指定目标及其子项' : '删除指定的文件或目录'
+  }
+  return '执行可能删除或覆盖数据的高风险操作'
+}
+
+/** Render the concrete or explicitly unknown deletion scope for a human approver. */
+function describeScope(
+  preview: PreviewOutcome | undefined,
+  facts: LexFacts,
+  dialect: JudgeInput['dialect'],
+): string {
+  if (preview?.kind === 'previewed') {
+    const counts = `WhatIf 预演解析出 ${preview.objectCount} 个对象（${preview.fileCount} 个文件、${preview.directoryCount} 个目录）`
+    if (preview.samples.length === 0) return `${counts}；预演没有返回可显示的目标名称`
+    const targets = preview.samples.map(quoteForApproval).join('、')
+    return preview.truncated
+      ? `${counts}；目标清单仅显示前 ${preview.samples.length} 个：${targets}；其余对象未显示`
+      : `${counts}；完整目标清单：${targets}`
+  }
+  if (preview?.kind === 'protected-hit') {
+    return `WhatIf 预演解析到受保护根目录 ${quoteForApproval(preview.target)}；该根目录范围内的数据都可能被删除，未展开逐文件清单`
+  }
+  if (preview?.kind === 'unpreviewable') {
+    return 'WhatIf 预演未能可靠完成，无法准确列出实际文件；缺少清单不表示命令不会删除文件'
+  }
+  if (facts.families.includes('delete') || facts.netDeleteCall) {
+    const expressions = facts.literalPaths.length === 0
+      ? '命令中没有可静态确认的目标路径'
+      : `命令中的目标表达式：${facts.literalPaths.map(quoteForApproval).join('、')}`
+    return dialect === 'bash'
+      ? `Bash 删除命令没有 WhatIf 预演，无法可靠展开通配符、变量或递归目录；${expressions}`
+      : `没有取得可验证的逐文件清单；${expressions}`
+  }
+  return '这类操作无法按普通文件删除逐项预览；命令所指向范围内的数据都可能受到影响'
+}
+
+/** Localize the model-check outcome without exposing its free-form working language. */
+function describeModelCheck(outcome: 'safe' | 'dangerous' | 'unavailable'): string {
+  switch (outcome) {
+    case 'safe': return '模型复核认为命令符合原意，但此风险级别仍要求你亲自批准'
+    case 'dangerous': return '模型复核认为此操作有危险，必须由你决定是否继续'
+    case 'unavailable': return '模型复核不可用，无法确认安全性，因此按最高风险请求批准'
+  }
+}
+
+/** Localize the classifier tier for the approval surface. */
+function describeTier(tier: Exclude<GuardTier, 'normal'>): string {
+  switch (tier) {
+    case 'disaster': return '灾难级'
+    case 'unparseable': return '无法可靠解析（按灾难级处理）'
+    case 'elevated': return '高风险'
+  }
 }
 
 /**
@@ -121,7 +189,7 @@ export class GuardEngine {
     const reviewTier = verdict.tier as Exclude<GuardTier, 'normal'>
     let effectiveTier: Exclude<GuardTier, 'normal'> = reviewTier
     let scopeSummary: string | undefined
-    let previewDetail: string | undefined
+    let deletionPreview: PreviewOutcome | undefined
     if (dialect === 'pwsh' && facts.families.includes('delete')) {
       const outcome = await this.options.preview.preview(input.command, input.signal)
       switch (outcome.kind) {
@@ -129,16 +197,18 @@ export class GuardEngine {
           // The dry run proved the command deletes nothing — nothing to review.
           return { kind: 'allow', tier: effectiveTier }
         case 'previewed':
+          deletionPreview = outcome
           scopeSummary = renderPreviewSummary(outcome.fileCount, outcome.directoryCount, outcome.samples, outcome.truncated)
           break
         case 'protected-hit':
           // The resolved scope IS a protected root: upgrade to the disaster tier
           // so the human confirmation carries the red disaster marking.
           effectiveTier = 'disaster'
+          deletionPreview = outcome
           scopeSummary = `resolved to the protected root "${outcome.target}"`
           break
         case 'unpreviewable':
-          previewDetail = outcome.detail
+          deletionPreview = outcome
           break
         /* v8 ignore next 3 -- PreviewOutcome is a typed same-process closed union; this branch is only the static exhaustiveness guard. */
         default: {
@@ -172,7 +242,7 @@ export class GuardEngine {
           tier: effectiveTier,
           severity: 'danger',
           modelCheck: 'safe',
-          reason: this.confirmReason(effectiveTier, verdict, 'the model confirms this is the intended, expected operation', previewDetail),
+          reason: this.confirmReason(input, effectiveTier, facts, deletionPreview, 'safe'),
         }
       case 'dangerous':
         return {
@@ -180,7 +250,7 @@ export class GuardEngine {
           tier: effectiveTier,
           ...effectiveTier === 'disaster' || effectiveTier === 'unparseable' ? { severity: 'danger' as const } : {},
           modelCheck: 'dangerous',
-          reason: this.confirmReason(effectiveTier, verdict, `the model itself declared it dangerous: ${outcome.explanation}`, previewDetail),
+          reason: this.confirmReason(input, effectiveTier, facts, deletionPreview, 'dangerous'),
         }
       case 'unavailable':
         // Fail closed: a review that could not run is treated as disaster.
@@ -189,7 +259,13 @@ export class GuardEngine {
           tier: effectiveTier,
           severity: 'danger',
           modelCheck: 'unavailable',
-          reason: this.confirmReason(effectiveTier === 'elevated' ? 'unparseable' : effectiveTier, verdict, `model-check unavailable: ${outcome.detail}`, previewDetail),
+          reason: this.confirmReason(
+            input,
+            effectiveTier === 'elevated' ? 'unparseable' : effectiveTier,
+            facts,
+            deletionPreview,
+            'unavailable',
+          ),
         }
       /* v8 ignore next 3 -- ModelCheckOutcome is a typed same-process closed union; this branch is only the static exhaustiveness guard. */
       default: {
@@ -199,25 +275,14 @@ export class GuardEngine {
     }
   }
 
-  /** Assemble the human-confirmation request body: tier heading, finding, conclusion, preview note. */
+  /** Assemble the Chinese human-confirmation text from the exact command and the verified deletion scope. */
   private confirmReason(
+    input: JudgeInput,
     tier: Exclude<GuardTier, 'normal'>,
-    verdict: GuardVerdict,
-    conclusion: string,
-    previewDetail: string | undefined,
+    facts: LexFacts,
+    preview: PreviewOutcome | undefined,
+    modelCheck: 'safe' | 'dangerous' | 'unavailable',
   ): string {
-    let heading: string
-    switch (tier) {
-      case 'disaster': heading = 'DISASTER tier'; break
-      case 'unparseable': heading = 'unparseable (treated as disaster)'; break
-      case 'elevated': heading = 'elevated tier'; break
-      /* v8 ignore next 3 -- the review tiers are a closed union; this branch is only the static exhaustiveness guard. */
-      default: {
-        const never: never = tier
-        throw new Error(`unreachable review tier: ${String(never)}`)
-      }
-    }
-    const base = `command guard: ${heading} — ${verdict.reason} — ${conclusion}`
-    return previewDetail === undefined ? base : `${base}; the command could not be dry-run previewed (${previewDetail})`
+    return `删除或破坏性命令需要人工批准。准备执行：${quoteForApproval(input.command)}。操作说明：${describeOperation(facts)}。删除范围：${describeScope(preview, facts, input.dialect)}。风险级别：${describeTier(tier)}。${describeModelCheck(modelCheck)}。请只在命令和删除范围都符合预期时批准一次。`
   }
 }

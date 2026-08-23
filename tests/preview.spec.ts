@@ -89,7 +89,7 @@ describe('renderPreviewSummary', () => {
 })
 
 describe('PreviewRunner', () => {
-  function runnerWith(script: (argv: string[]) => Promise<SpawnResult>) {
+  function runnerWith(script: (argv: string[]) => Promise<SpawnResult>, sampleLimit = 10) {
     const calls: string[][] = []
     const runner = new PreviewRunner(
       async (argv, options) => {
@@ -97,7 +97,7 @@ describe('PreviewRunner', () => {
         void options
         return await script(argv)
       },
-      { timeoutMs: 1000, sampleLimit: 10, pwshPath: 'pwsh' },
+      { timeoutMs: 1000, sampleLimit, pwshPath: 'pwsh' },
       ROOTS,
     )
     return { runner, calls }
@@ -151,7 +151,7 @@ describe('PreviewRunner', () => {
       return { stdout: ENUM_JSON, stderr: '', exitCode: 0, timedOut: false }
     })
     const outcome = await runner.preview('Remove-Item C:\\ws\\sub -Recurse')
-    expect(outcome).toMatchObject({ kind: 'previewed', fileCount: 2, directoryCount: 1, objectCount: 3 })
+    expect(outcome).toMatchObject({ kind: 'previewed', fileCount: 2, directoryCount: 2, objectCount: 4 })
     expect(outcome.kind === 'previewed' && outcome.samples).toContain('C:\\ws\\sub\\b.txt')
   })
 
@@ -199,10 +199,26 @@ describe('PreviewRunner', () => {
     expect(outcome.kind).toBe('previewed')
     if (outcome.kind === 'previewed') {
       expect(outcome.fileCount).toBe(1)
-      expect(outcome.directoryCount).toBe(0)
+      expect(outcome.directoryCount).toBe(1)
       expect(outcome.truncated).toBe(true)
       expect(outcome.samples.length).toBeLessThanOrEqual(10)
     }
+  })
+
+  it('marks a complete subtree as truncated when the global sample cap drops entries', async () => {
+    const enumJson = JSON.stringify([
+      { path: 'C:\\ws\\sub', files: 2, dirs: 0, samples: ['C:\\ws\\sub\\a.txt', 'C:\\ws\\sub\\b.txt'], truncated: false },
+    ])
+    const { runner } = runnerWith(async (argv) => {
+      const encoded = argv.includes('-EncodedCommand') ? argv[argv.indexOf('-EncodedCommand') + 1]! : ''
+      const script = Buffer.from(encoded, 'base64').toString('utf16le')
+      if (script.includes('$WhatIfPreference')) {
+        return { stdout: 'What if: Performing the operation "Remove Directory" on target "C:\\ws\\sub".', stderr: '', exitCode: 0, timedOut: false }
+      }
+      return { stdout: enumJson, stderr: '', exitCode: 0, timedOut: false }
+    }, 2)
+    const outcome = await runner.preview('Remove-Item C:\\ws\\sub -Recurse')
+    expect(outcome).toMatchObject({ kind: 'previewed', objectCount: 3, samples: ['C:\\ws\\sub', 'C:\\ws\\sub\\a.txt'], truncated: true })
   })
 
   it('returns unpreviewable when the caller aborted before the dry run', async () => {

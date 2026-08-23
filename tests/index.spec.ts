@@ -186,7 +186,7 @@ describe('command-guard plugin', () => {
     // Without an approval seam the ask degrades to a deny carrying the guard's
     // own confirmation text.
     expect(result.isError).toBe(true)
-    expect(resultText(result)).toContain('DISASTER tier')
+    expect(resultText(result)).toContain('风险级别：灾难级')
     expect(records).toHaveLength(1)
     expect(records[0]?.type).toBe('command-guard/decision')
     expect(records[0]?.data).toMatchObject({
@@ -278,7 +278,7 @@ describe('command-guard plugin', () => {
       callId: CallId('c5'), name: 'pwsh', arguments: { command: 'Format-Volume D' }, agent: throwingAgent, signal: new AbortController().signal,
     })
     expect(result.isError).toBe(true)
-    expect(resultText(result)).toContain('DISASTER tier')
+    expect(resultText(result)).toContain('风险级别：灾难级')
   })
 
   it('omits the prompt section when enablePrompt is false', async () => {
@@ -327,7 +327,10 @@ describe('command-guard plugin', () => {
     expect(result.isError).toBe(true)
     expect(resultText(result)).toContain('the user rejected tool "pwsh"')
     expect(requests).toHaveLength(1)
-    expect(requests[0]).toMatchObject({ toolName: 'pwsh', severity: 'danger' })
+    expect(requests[0]).toMatchObject({
+      toolName: 'pwsh', severity: 'danger',
+      reason: expect.stringContaining('准备执行："Format-Volume D"'),
+    })
   })
 
   it('writes the complete decision trail to the rotated file log', async () => {
@@ -375,7 +378,7 @@ describe('command-guard plugin', () => {
     })
     const result = await execute(ctx, records, 'Clear-RecycleBin -Force')
     expect(result.isError).toBe(true)
-    expect(resultText(result)).toContain('the model itself declared it dangerous')
+    expect(resultText(result)).toContain('模型复核认为此操作有危险')
     expect(records.at(-1)?.data).toMatchObject({ decision: 'ask', tier: 'elevated', modelCheck: 'dangerous' })
   })
 
@@ -386,7 +389,7 @@ describe('command-guard plugin', () => {
       callId: CallId('c-bash-1'), name: 'bash', arguments: { command: 'rm -rf /' }, agent: fakeAgent(records), signal: new AbortController().signal,
     })
     expect(result.isError).toBe(true)
-    expect(resultText(result)).toContain('DISASTER tier')
+    expect(resultText(result)).toContain('风险级别：灾难级')
     expect(records.at(-1)?.data).toMatchObject({ toolName: 'bash', decision: 'ask', tier: 'disaster' })
   })
 

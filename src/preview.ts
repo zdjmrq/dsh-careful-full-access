@@ -201,20 +201,27 @@ export class PreviewRunner {
     }
     const subtrees = parseEnumeration(enumeration.stdout)
     if (subtrees === undefined) return { kind: 'unpreviewable', detail: 'the subtree enumeration produced unreadable output' }
+    const missingDirectories = new Set(subtrees.filter(subtree => subtree.missing === true).map(subtree => subtree.path))
+    const resolvedTargets = targets.filter(entry => !missingDirectories.has(entry.target))
     let fileCount = fileTargets
     let directoryCount = 0
-    const samples: string[] = targets.slice(0, this.options.sampleLimit).map(entry => entry.target)
-    let truncated = targets.length > this.options.sampleLimit
+    const samples: string[] = resolvedTargets.slice(0, this.options.sampleLimit).map(entry => entry.target)
+    let truncated = resolvedTargets.length > this.options.sampleLimit
     for (const subtree of subtrees) {
       if (subtree.missing === true) continue
       fileCount += subtree.files
-      directoryCount += subtree.dirs
+      // The subtree enumeration counts descendants only; the top-level target
+      // directory is also deleted and belongs in the approval total.
+      directoryCount += subtree.dirs + 1
       for (const sample of subtree.samples) {
         if (samples.length < this.options.sampleLimit) samples.push(sample)
+        else truncated = true
       }
       truncated = truncated || subtree.truncated
     }
-    return { kind: 'previewed', objectCount: fileCount + directoryCount, fileCount, directoryCount, samples, truncated }
+    const objectCount = fileCount + directoryCount
+    truncated = truncated || objectCount > samples.length
+    return { kind: 'previewed', objectCount, fileCount, directoryCount, samples, truncated }
   }
 }
 

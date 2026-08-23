@@ -1,7 +1,7 @@
 {
   "name": "dsh-careful-full-access",
   "description": "DSH plugin: careful-full-access-only command guard — static tiering, WhatIf scope resolution, model-check review (intent/safety/scope), danger-marked human confirmation, and a rotated audit log",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/zdjmrq/dsh-careful-full-access.git"

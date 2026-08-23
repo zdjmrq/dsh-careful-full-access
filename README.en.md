@@ -63,11 +63,14 @@ danger-full-access is the user's explicit opt-out; neither is second-guessed.
   "not intended" → deny outright with the model's own explanation; "intended
   and safe" → elevated runs, disaster still needs a human; "dangerous" →
   human confirmation for every tier.
-- **Red human backstop**: disaster-tier (or model-declared-dangerous) commands
-  route through the ordinary approval seam carrying the command text, the tier
-  heading, and the model-check conclusion; `severity: 'danger'` renders the
-  approval panel with a red band/border/dot. Under approval policy `never`
-  they are auto-rejected (flagged commands simply cannot run in that session).
+- **Chinese human backstop**: disaster-tier (or model-declared-dangerous)
+  commands route through the ordinary approval seam with an accurate Chinese
+  explanation of the exact command, destructive effect, and deletion scope.
+  A successful WhatIf preview reports exact file/directory counts and either
+  the complete target list or an explicitly labelled bounded prefix; a failed
+  preview says that the file list is unknown instead of implying an empty
+  scope. `severity: 'danger'` gives disaster approvals a red band/border/dot;
+  approval policy `never` auto-rejects them.
 - **Audit**: every decision — allow, deny, human-confirm — is audited twice.
   The complete trail goes to the rotated file log
   `$DSH_HOME/logs/command-guard.log` (5 MB × 3 copies by default), while the
@@ -129,7 +132,7 @@ The standalone repo is self-verifiable after cloning:
 ```sh
 pnpm install          # registry dependencies (published DSH packages)
 pnpm run typecheck    # tsc against published types, zero errors (dual-compatible mode typing)
-pnpm test             # vitest: 227 pass + 1 conditionally skipped
+pnpm test             # vitest: 237 pass + 1 conditionally skipped
 ```
 
 - The guard source is dual-compatible with published DSH types: the sandbox
@@ -138,8 +141,7 @@ pnpm test             # vitest: 227 pass + 1 conditionally skipped
   enum.
 - The one skipped case (`passes the danger severity through the approval
   seam`) exercises the RED confirmation chain — a core-patch change that only
-  exists in a patched harness tree; inside the tree the case runs normally
-  (full tree suite: 228 tests, 100% line/branch/function coverage).
+  exists in a patched harness tree; inside the tree the case runs normally.
 - `DSH_GUARD_CORE_PATCH=1 pnpm test` forces the case in a patched environment.
 
 ## Config
@@ -153,10 +155,11 @@ window), `analyzeTimeoutMs`, `previewTimeoutMs`, `previewSampleLimit`,
 
 ## Testing and verification
 
-- Standalone repo: `pnpm run typecheck` with zero errors; `pnpm test` with 227
+- Standalone repo: `pnpm run typecheck` with zero errors; `pnpm test` with 237
   passing and 1 conditionally skipped (see the section above).
-- Inside a patched harness tree: 228 unit + pipeline integration tests, 100%
-  line/branch/function coverage; zero-risk smoke
+- Inside a patched harness tree: focused tests cover the Chinese approval
+  body, exact object counts, complete/partial target lists, and unknown scope;
+  zero-risk smoke
   `Remove-Item -Recurse -Force Z:\` (nonexistent drive) → disaster-tier
   review, never executed; runner e2e proving child delete/rename work under a
   restricted token, the workspace root cannot be deleted/renamed, and legacy
@@ -167,8 +170,9 @@ window), `analyzeTimeoutMs`, `previewTimeoutMs`, `previewSampleLimit`,
 - `iex`/script-block dynamic construction cannot be analyzed statically →
   fail-closed (treated as disaster: human confirmation, auto-reject under
   `never`).
-- bash has no WhatIf equivalent: on POSIX the review runs without a resolved
-  scope summary.
+- bash has no WhatIf equivalent: approvals identify literal target expressions
+  when available, but explicitly say that wildcard, variable, and recursive
+  expansion could not be verified.
 - Only a TOP-LEVEL `git` invocation gets subcommand dispatch; a piped or
   nested `git` falls back to the generic scan, which may misread its
   subcommand semantics.
