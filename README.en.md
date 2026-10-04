@@ -1,3 +1,6 @@
+> [!WARNING]
+> **This repository is deprecated.** The functionality now ships built into official dsh releases, so installing this plugin is no longer necessary. The repository is kept for historical reference only and is no longer maintained.
+
 # dsh-careful-full-access
 
 > A DeepSeek Harness (DSH) plugin: a command guard that is **active only in the
