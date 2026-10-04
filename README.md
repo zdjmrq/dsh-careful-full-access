@@ -1,3 +1,6 @@
+> [!WARNING]
+> **本仓库已废弃** —— 相关能力已随 dsh 正式版本内置发布，无需再安装本插件；仓库仅作历史存档，不再维护。
+
 # dsh-careful-full-access
 
 > DeepSeek Harness（DSH）插件：命令守卫——**只在 `careful-full-access` 模式下生效**，
